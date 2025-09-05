@@ -12,6 +12,26 @@ export interface ReactEditor extends DOMEditor {
    * disabled.
    */
   getChunkSize: (node: Ancestor) => number | null
+
+  /**
+   * Data batch loading configuration for large documents
+   */
+  dataBatchConfig?: {
+    enabled: boolean
+    initialBatch: number
+    batchSize: number
+    interval: number
+  }
+
+  /**
+   * Callback function called when a chunk is rendered
+   */
+  onChunkRendered?: (renderedCount: number, totalCount: number) => void
+
+  /**
+   * Callback function called when all chunks are rendered
+   */
+  onAllChunksRendered?: () => void
 }
 
 export interface ReactEditorInterface extends DOMEditorInterface {}

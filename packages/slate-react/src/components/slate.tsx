@@ -23,6 +23,14 @@ export const Slate = (props: {
   onChange?: (value: Descendant[]) => void
   onSelectionChange?: (selection: Selection) => void
   onValueChange?: (value: Descendant[]) => void
+  dataBatchConfig?: {
+    enabled: boolean
+    initialBatch: number
+    batchSize: number
+    interval: number
+  }
+  onChunkRendered?: (renderedCount: number, totalCount: number) => void
+  onAllChunksRendered?: () => void
 }) => {
   const {
     editor,
@@ -31,8 +39,20 @@ export const Slate = (props: {
     onSelectionChange,
     onValueChange,
     initialValue,
+    dataBatchConfig,
+    onChunkRendered,
+    onAllChunksRendered,
     ...rest
   } = props
+
+  // get callbacks and config from editor instance, prioritize props config
+  const chunkRenderedCallback = onChunkRendered || editor.onChunkRendered
+  const allChunksRenderedCallback =
+    onAllChunksRendered || editor.onAllChunksRendered
+  const batchConfig = dataBatchConfig || editor.dataBatchConfig
+
+  const loadingRef = React.useRef(false)
+  const allChunksRenderedRef = React.useRef(false)
 
   // Run once on first mount, but before `useEffect` or render
   React.useState(() => {
@@ -50,7 +70,23 @@ export const Slate = (props: {
       )
     }
 
-    editor.children = initialValue
+    // data layer batch loading
+    if (batchConfig?.enabled) {
+      // batch mode: set only part of the data first
+      const initialBatch = Math.min(
+        batchConfig.initialBatch,
+        initialValue.length
+      )
+      editor.children = initialValue.slice(0, initialBatch)
+      // reset completed state, because the data may have changed
+      allChunksRenderedRef.current = false
+    } else {
+      // full rendering, set complete data
+      editor.children = initialValue
+      // in full mode, no need to trigger batch completion callback
+      allChunksRenderedRef.current = true
+    }
+
     Object.assign(editor, rest)
   })
 
@@ -85,6 +121,110 @@ export const Slate = (props: {
   }, [editor, onContextChange])
 
   const [isFocused, setIsFocused] = useState(ReactEditor.isFocused(editor))
+
+  // data layer batch loading state
+  const [currentDataCount, setCurrentDataCount] = useState(() => {
+    if (batchConfig?.enabled) {
+      return Math.min(batchConfig.initialBatch, initialValue.length)
+    }
+    return initialValue.length
+  })
+
+  // data layer batch loading
+  useEffect(() => {
+    if (!batchConfig?.enabled || currentDataCount >= initialValue.length) {
+      if (
+        currentDataCount >= initialValue.length &&
+        batchConfig?.enabled &&
+        !allChunksRenderedRef.current
+      ) {
+        allChunksRenderedRef.current = true
+        allChunksRenderedCallback?.()
+      }
+      return
+    }
+
+    const loadNextBatch = () => {
+      if (loadingRef.current) return
+
+      const nextCount = Math.min(
+        currentDataCount + batchConfig.batchSize,
+        initialValue.length
+      )
+
+      if (nextCount > currentDataCount) {
+        loadingRef.current = true
+
+        editor.children = initialValue.slice(0, nextCount)
+
+        setCurrentDataCount(nextCount)
+        chunkRenderedCallback?.(nextCount, initialValue.length)
+
+        // trigger editor re-render
+        handleSelectorChange()
+
+        loadingRef.current = false
+      }
+    }
+
+    let idleId: number
+    let timeoutId: NodeJS.Timeout
+
+    const scheduleNextBatch = () => {
+      if (batchConfig.interval > 0) {
+        if (typeof requestIdleCallback !== 'undefined') {
+          idleId = requestIdleCallback(
+            deadline => {
+              // if there is still idle time, execute immediately
+              if (deadline.timeRemaining() > 0) {
+                loadNextBatch()
+                // if there is still data to load, schedule the next batch
+                if (currentDataCount < initialValue.length) {
+                  scheduleNextBatch()
+                }
+              } else {
+                // if there is no idle time, delay execution
+                timeoutId = setTimeout(() => {
+                  loadNextBatch()
+                  if (currentDataCount < initialValue.length) {
+                    scheduleNextBatch()
+                  }
+                }, batchConfig.interval)
+              }
+            },
+            { timeout: batchConfig.interval }
+          )
+        } else {
+          // browser does not support requestIdleCallback, use setTimeout as fallback
+          timeoutId = setTimeout(() => {
+            loadNextBatch()
+            if (currentDataCount < initialValue.length) {
+              scheduleNextBatch()
+            }
+          }, batchConfig.interval)
+        }
+      } else {
+        // if there is no interval, execute immediately
+        loadNextBatch()
+      }
+    }
+
+    // start scheduling
+    scheduleNextBatch()
+
+    return () => {
+      if (idleId) cancelIdleCallback(idleId)
+      if (timeoutId) clearTimeout(timeoutId)
+    }
+  }, [
+    batchConfig,
+    currentDataCount,
+    initialValue,
+    chunkRenderedCallback,
+    allChunksRenderedCallback,
+    editor,
+    handleSelectorChange,
+  ])
 
   useEffect(() => {
     setIsFocused(ReactEditor.isFocused(editor))

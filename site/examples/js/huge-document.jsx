@@ -30,7 +30,7 @@ const parseEnum = (key, options, defaultValue) => {
   return defaultValue
 }
 const initialConfig = {
-  blocks: parseNumber('blocks', 10000),
+  blocks: parseNumber('blocks', 100000),
   chunking: parseBoolean('chunking', true),
   chunkSize: parseNumber('chunk_size', 1000),
   chunkDivs: parseBoolean('chunk_divs', true),
@@ -94,6 +94,9 @@ const HugeDocumentExample = () => {
   const [initialValue, setInitialValue] = useState(initialInitialValue)
   const [editor, setEditor] = useState(() => createEditor(config))
   const [editorVersion, setEditorVersion] = useState(0)
+  const [isAllChunksRendered, setIsAllChunksRendered] = useState(
+    !config.chunking
+  )
   const setConfig = useCallback(
     partialConfig => {
       const newConfig = { ...config, ...partialConfig }
@@ -125,6 +128,7 @@ const HugeDocumentExample = () => {
         {...props}
         contentVisibilityLowest={config.contentVisibilityMode === 'chunk'}
         outline={config.chunkOutlines}
+        chunkSize={config.chunkSize}
       />
     ),
     [config.contentVisibilityMode, config.chunkOutlines]
@@ -140,13 +144,27 @@ const HugeDocumentExample = () => {
       {rendering ? (
         <div>Rendering&hellip;</div>
       ) : (
-        <Slate key={editorVersion} editor={editor} initialValue={initialValue}>
+        <Slate
+          key={editorVersion}
+          editor={editor}
+          initialValue={initialValue}
+          onAllChunksRendered={() => {
+            setIsAllChunksRendered(true)
+          }}
+          dataBatchConfig={{
+            enabled: config.chunking,
+            initialBatch: 500,
+            batchSize: 1000,
+            interval: 16,
+          }}
+        >
           <Editable
             placeholder="Enter some text…"
             renderElement={renderElement}
             renderChunk={config.chunkDivs ? renderChunk : undefined}
             spellCheck
             autoFocus
+            readOnly={!isAllChunksRendered}
           />
         </Slate>
       )}
@@ -159,9 +177,12 @@ const Chunk = ({
   lowest,
   contentVisibilityLowest,
   outline,
+  chunkSize,
 }) => {
   const style = {
     contentVisibility: contentVisibilityLowest && lowest ? 'auto' : undefined,
+    containIntrinsicSize:
+      contentVisibilityLowest && lowest ? `${100 * chunkSize}px` : undefined,
     border: outline ? '1px solid red' : undefined,
     padding: outline ? 20 : undefined,
     marginBottom: outline ? 20 : undefined,
